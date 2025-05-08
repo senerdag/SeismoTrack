@@ -1,0 +1,217 @@
+﻿@model List<EarthquakeModel>
+@using System.Text.Json
+@{
+    Layout = null;
+}
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>Son Depremler</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css" />
+    <style>
+        html, body {
+            height: 100%;
+            margin: 0;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+        }
+
+        #map {
+            height: 100%;
+            width: 100%;
+        }
+
+        .panel {
+            position: absolute;
+            top: 0;
+            right: 0;
+            height: 100%;
+            background: white;
+            border-left: 1px solid #ccc;
+            padding: 10px;
+            width: 400px;
+            z-index: 1000;
+            overflow-y: auto; /* Scroll barı geri getirdik */
+        }
+
+        .control-buttons {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 1001;
+            display: flex;
+            flex-direction: row;
+            gap: 5px;
+            align-items: center;
+        }
+
+        .leaflet-control-zoom {
+            position: absolute !important;
+            top: 150px !important;
+            left: 10px !important;
+            z-index: 1002 !important;
+        }
+
+        .leaflet-control-layers {
+            position: absolute !important;
+            top: 60px !important;
+            left: 10px !important;
+            z-index: 1002 !important;
+        }
+
+        .btn {
+            background: #007bff;
+            color: white;
+            padding: 6px 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            white-space: nowrap;
+        }
+
+        table {
+            font-size: 0.85rem;
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            padding: 4px 6px;
+            border-bottom: 1px solid #ddd;
+        }
+
+        th {
+            background-color: #f2f2f2;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+
+    <div class="panel" id="quakePanel">
+        <h4>Son 3 Gündeki Depremler</h4>
+        <table>
+            <thead>
+                <tr>
+                    <th>Tarih</th>
+                    <th>Lokasyon</th>
+                    <th>Derinlik</th>
+                    <th>Mg</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var eq in Model)
+                {
+                    <tr>
+                        <td>@TimeZoneInfo.ConvertTimeFromUtc(eq.EventDate, TimeZoneInfo.FindSystemTimeZoneById("Turkey Standard Time")).ToString("g")</td>
+                        <td>@eq.Location</td>
+                        <td>@eq.Depth</td>
+                        <td>@eq.Magnitude</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <div class="control-buttons">
+        <button class="btn" onclick="togglePanel()">📋 Liste</button>
+        <button class="btn" id="toggleFayBtn" onclick="toggleFay()">🌋 Faylar</button>
+        <!-- Layer seçimi burada olacak -->
+        <div id="layerControlContainer"></div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
+    <script>
+        var panelVisible = true;
+        function togglePanel() {
+            panelVisible = !panelVisible;
+            document.getElementById('quakePanel').style.display = panelVisible ? 'block' : 'none';
+        }
+
+        var earthquakes = @Html.Raw(JsonSerializer.Serialize(Model));
+        const map = L.map('map').setView([39.0, 35.0], 6);
+
+        const normalMap = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap'
+        });
+
+        const satelliteMap = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Tiles © Esri'
+        }).addTo(map);
+
+        const baseMaps = {
+            '🗺️ Harita': normalMap,
+            '🛰️ Uydu': satelliteMap
+        };
+
+        const layerControl = L.control.layers(baseMaps);
+        layerControl.addTo(map);
+
+        // Layer control'ü sola al
+        const controlContainer = layerControl.getContainer();
+        document.getElementById('layerControlContainer').appendChild(controlContainer);
+
+        earthquakes.forEach(eq => {
+            if (eq.latitude && eq.longitude) {
+                const dateUtc = new Date(eq.eventDate);
+                const turkishDate = new Date(dateUtc.getTime() + 3 * 60 * 60 * 1000);
+
+                let color = 'green';
+                let radius = eq.magnitude * 2;
+
+                if (eq.magnitude >= 1.5) color = 'yellow';
+                if (eq.magnitude >= 3.0) color = 'orange';
+                if (eq.magnitude >= 4.0) color = 'red';
+                if (eq.magnitude >= 5.0) color = 'purple';
+
+                const popupHtml = `
+                            <b>${eq.location}</b><br>
+                                                            Büyüklük: <b style="color:${color};text-shadow:
+          1px 1px 2px black,
+          0 0 1em purple,
+          0 0 0.2em white;">${eq.magnitude}</b><br>
+                            Derinlik(Km): ${eq.depth}<br>
+                            Tarih: ${turkishDate.toLocaleString('tr-TR')}
+                        `;
+
+                L.circleMarker([eq.latitude, eq.longitude], {
+                    radius: radius,
+                    color: 'black',
+                    weight: 1.5,
+                    fillColor: color,
+                    fillOpacity: 1
+                }).addTo(map).bindPopup(popupHtml);
+            }
+        });
+
+        let fayLayer;
+        let fayVisible = false;
+
+        fetch('/faylar/faylar.json')
+            .then(res => res.json())
+            .then(data => {
+                fayLayer = L.geoJSON(data, {
+                    style: {
+                        color: 'black',
+                        weight: 2
+                    }
+                });
+            });
+
+        function toggleFay() {
+            if (fayLayer) {
+                if (fayVisible) {
+                    map.removeLayer(fayLayer);
+                    document.getElementById('toggleFayBtn').textContent = "🌋 Faylar";
+                } else {
+                    fayLayer.addTo(map);
+                    document.getElementById('toggleFayBtn').textContent = "🌋 Gizle";
+                }
+                fayVisible = !fayVisible;
+            }
+        }
+    </script>
+</body>
+</html>
